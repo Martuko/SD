@@ -45,6 +45,6 @@ services:
     ##ports:
     ##  - "8002:8002"
 
-
+##hola mundo
 volumes:
   ollama:
