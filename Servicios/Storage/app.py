@@ -109,13 +109,13 @@ class SeedStatus(BaseModel):
     inserted: int
 
 @app.post("/seed", response_model=SeedStatus)
-async def seed_from_csv(path: str = "/data/train.csv", limit: int | None = None):
+async def seed_from_csv(path: str = "/data/test.csv", limit: int | None = None):
     import csv
     inserted = 0
     async with app.state.pool.acquire() as con:
         existing = await con.fetchval("SELECT COUNT(*) FROM questions")
-        if existing and existing >= 10000:
-            return SeedStatus(inserted=0)
+        #if existing and existing >= 10000:
+        #   return SeedStatus(inserted=0)
         async with con.transaction():
             with open(path, newline='', encoding="utf-8") as f:
                 rdr = csv.reader(f)
@@ -132,6 +132,10 @@ async def seed_from_csv(path: str = "/data/train.csv", limit: int | None = None)
                         qid, best
                     )
                     inserted += 1
-                    if limit and inserted >= limit:
-                        break
+                    total = existing + inserted
+
+                    if inserted % 500 == 0: 
+                        print(f"{existing + inserted}preguntas totales insertadas...")
+
+                    
     return SeedStatus(inserted=inserted)

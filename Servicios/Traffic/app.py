@@ -3,10 +3,10 @@ import httpx, os, asyncio, time, random, uuid
 from datetime import datetime
 
 # Cache (gateway/orchestrator)
-TARGET_URL = os.getenv("TARGET_URL", "http://cache:8000/ask")
+TARGET_URL = os.getenv("TARGET_URL", "http://cache:8001/ask")
 
 # Storage (persistencia)
-STORAGE_HOST = os.getenv("STORAGE_HOST", "http://storage:8000")
+STORAGE_HOST = os.getenv("STORAGE_HOST", "http://storage:8003")
 
 # Fuente de preguntas
 SOURCE = os.getenv("SOURCE", "local")           # local | db
