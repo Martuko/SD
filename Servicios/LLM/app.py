@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 import httpx, os, time
 
-OLLAMA = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+#cambie http://localhost:11434 por http://ollama:11434
+
+OLLAMA = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 MODEL  = os.getenv("LLM_MODEL", "llama3.1:8b-instruct-q4_K_M")
 MAX_TOK = int(os.getenv("LLM_MAX_TOKENS", "512"))
 TEMP    = float(os.getenv("LLM_TEMPERATURE", "0.2"))

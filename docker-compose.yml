@@ -1,9 +1,14 @@
-version: "3.9"
+#version: "3.9"
 
 services:
   ollama:
     image: ollama/ollama:latest
     runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
     ports:
       - "11434:11434"
     volumes:
@@ -12,7 +17,6 @@ services:
       - OLLAMA_NUM_PARALLEL=2
       - OLLAMA_MAX_LOADED_MODELS=2
       - OLLAMA_KEEP_ALIVE=30m
-  
 
   llm:
     build: ./Servicios/LLM
@@ -24,13 +28,15 @@ services:
       - LLM_TEMPERATURE=0.2
     depends_on:
       - ollama
-        
     ports:
       - "8000:8000"
+
   redis:
     image: redis:7
-    ports:
-      - "6379:6379"
+    # Opcional: activa política de evicción para pruebas con caché
+    # command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    #ports:
+    #  - "6379:6379"
 
   cache:
     build: ./Servicios/Cache
@@ -45,16 +51,71 @@ services:
       - score
     ports:
       - "8001:8001"
-    
+
   score:
     build: ./Servicios/Score
     environment:
-      - LLM_HOST=http://llm:8000
+       - LLM_HOST=http://llm:8000
+       - STORAGE_HOST=http://storage:8003
     depends_on:
-      - llm
+       - llm
+       - storage
     ports:
       - "8002:8002"
 
-##hola mundo
+
+  # --- NUEVOS SERVICIOS ---
+
+  db:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=app
+      - POSTGRES_PASSWORD=app
+      - POSTGRES_DB=qa
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d qa || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  storage:
+    build: ./Servicios/Storage
+    command: uvicorn app:app --host 0.0.0.0 --port 8003
+    environment:
+      - DATABASE_URL=postgresql://app:app@db:5432/qa
+      - DB_INIT_MAX_RETRIES=60
+      - DB_INIT_RETRY_DELAY=1.0
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8003:8003"
+    volumes:
+      - ./data:/data # monta aquí tu CSV (train.csv/test.csv) para /seed
+
+  traffic:
+    build: ./Servicios/Traffic
+    command: uvicorn app:app --host 0.0.0.0 --port 8010
+    environment:
+      - CACHE_URL=http://cache:8001/ask
+      - STORAGE_URL=http://storage:8003
+      - TRAFFIC_MODE=poisson      # poisson | pareto | uniform
+      - LAMBDA=5.0
+      - CONCURRENCY=10    
+      - SAMPLE_LIMIT=60000 
+      - PARETO_ALPHA=1.5
+      - UNIFORM_MIN_S=0.05
+      - UNIFORM_MAX_S=0.5
+      - BATCH=1
+    depends_on:
+      - cache
+      - storage
+    ports:
+     - "8010:8010"
+
 volumes:
   ollama:
+  dbdata:
