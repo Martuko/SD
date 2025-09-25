@@ -1,6 +1,9 @@
-#version: "3.9"
+# docker-compose.yml (extendido con Kafka)
+
+version: "3.9"
 
 services:
+  # ---- EXISTENTES ----
   ollama:
     image: ollama/ollama:latest
     runtime: nvidia
@@ -27,44 +30,35 @@ services:
       - LLM_MAX_TOKENS=512
       - LLM_TEMPERATURE=0.2
     depends_on:
+      - kafka
       - ollama
+          
     ports:
       - "8000:8000"
 
   redis:
     image: redis:7
-    # Opcional: activa política de evicción para pruebas con caché
-    # command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
-    #ports:
-    #  - "6379:6379"
 
   cache:
     build: ./Servicios/Cache
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - LLM_HOST=http://llm:8000
-      - SCORE_HOST=http://score:8002
     depends_on:
+      - kafka
       - redis
-      - llm
-      - score
+        
     ports:
       - "8001:8001"
 
   score:
     build: ./Servicios/Score
-    environment:
-       - LLM_HOST=http://llm:8000
-       - STORAGE_HOST=http://storage:8003
     depends_on:
-       - llm
-       - storage
+      - kafka
+      - llm
+      - storage
     ports:
       - "8002:8002"
-
-
-  # --- NUEVOS SERVICIOS ---
 
   db:
     image: postgres:16
@@ -89,32 +83,70 @@ services:
       - DB_INIT_MAX_RETRIES=60
       - DB_INIT_RETRY_DELAY=1.0
     depends_on:
+      kafka:
+        condition: service_healthy
       db:
         condition: service_healthy
     ports:
       - "8003:8003"
     volumes:
-      - ./data:/data # monta aquí tu CSV (train.csv/test.csv) para /seed
+      - ./data:/data
 
   traffic:
     build: ./Servicios/Traffic
     command: uvicorn app:app --host 0.0.0.0 --port 8010
     environment:
-      - CACHE_URL=http://cache:8001/ask
-      - STORAGE_URL=http://storage:8003
-      - TRAFFIC_MODE=poisson      # poisson | pareto | uniform
-      - LAMBDA=5.0
-      - CONCURRENCY=10    
-      - SAMPLE_LIMIT=60000 
-      - PARETO_ALPHA=1.5
-      - UNIFORM_MIN_S=0.05
-      - UNIFORM_MAX_S=0.5
-      - BATCH=1
+      - SAMPLE_LIMIT=60000
+      - DIST=poisson
+      - RATE=5.0
+      - CONCURRENCY=10
+      - DURATION=60
     depends_on:
+      - kafka
       - cache
       - storage
     ports:
      - "8010:8010"
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: sd-kafka-1
+    hostname: kafka
+    ports:
+      - "9092:9092"   # puerto contenedores
+      - "29092:29092" # puerto host
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      zookeeper: 
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+  kafdrop:
+    image: obsidiandynamics/kafdrop
+    depends_on:
+      - kafka
+    ports:
+      - "9000:9000"
+    environment:
+      KAFKA_BROKERCONNECT: kafka:9092
 
 volumes:
   ollama:
