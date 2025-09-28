@@ -30,6 +30,7 @@ services:
       - LLM_MAX_TOKENS=512
       - LLM_TEMPERATURE=0.2
     depends_on:
+      - init-topics
       - kafka
       - ollama
           
@@ -41,19 +42,24 @@ services:
 
   cache:
     build: ./Servicios/Cache
+    command: uvicorn app:app --host 0.0.0.0 --port 8001
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDIS_POLICY=allkeys-lru
+      - REDIS_MAXMEMORY=100mb
     depends_on:
+      - init-topics
       - kafka
       - redis
-        
     ports:
       - "8001:8001"
+
 
   score:
     build: ./Servicios/Score
     depends_on:
+      - init-topics
       - kafka
       - llm
       - storage
@@ -83,6 +89,8 @@ services:
       - DB_INIT_MAX_RETRIES=60
       - DB_INIT_RETRY_DELAY=1.0
     depends_on:
+      init-topics:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
       db:
@@ -98,10 +106,11 @@ services:
     environment:
       - SAMPLE_LIMIT=60000
       - DIST=poisson
-      - RATE=5.0
-      - CONCURRENCY=10
+      - RATE=1.0
+      - CONCURRENCY=1
       - DURATION=60
     depends_on:
+      - init-topics
       - kafka
       - cache
       - storage
@@ -124,6 +133,7 @@ services:
       - "9092:9092"   # puerto contenedores
       - "29092:29092" # puerto host
     environment:
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
@@ -131,9 +141,12 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      
     depends_on:
       zookeeper: 
         condition: service_started
+      
+
     healthcheck:
       test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list || exit 1"]
       interval: 10s
@@ -147,6 +160,21 @@ services:
       - "9000:9000"
     environment:
       KAFKA_BROKERCONNECT: kafka:9092
+  
+  init-topics:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: >
+      bash -c "
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic questions.requests --partitions 1 --replication-factor 1 &&
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic questions.llm --partitions 1 --replication-factor 1 &&
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic questions.answers --partitions 1 --replication-factor 1 &&
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic storage.persist --partitions 1 --replication-factor 1 &&
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic cache.update --partitions 1 --replication-factor 1
+      "
+    restart: "no"
 
 volumes:
   ollama:

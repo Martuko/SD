@@ -49,12 +49,12 @@ async def connect_to_kafka_with_retry():
 
             # Verificar bootstrap
             await producer.client.bootstrap()
-            logger.info(" ✅ Conexión a Kafka establecida exitosamente")
+            logger.info(" Conexión a Kafka establecida exitosamente")
             kafka_ready.set()
             return True
 
         except Exception as e:
-            logger.warning(f" ❌ Intento {attempt + 1} falló: {e}")
+            logger.warning(f"  Intento {attempt + 1} falló: {e}")
 
             if producer:
                 await producer.stop()
@@ -64,7 +64,7 @@ async def connect_to_kafka_with_retry():
                 logger.info(f"Reintentando en {retry_delay} segundos...")
                 await asyncio.sleep(retry_delay)
             else:
-                logger.error(" ❌ No se pudo conectar a Kafka después de todos los intentos")
+                logger.error("  No se pudo conectar a Kafka después de todos los intentos")
                 return False
 
 
@@ -79,14 +79,16 @@ async def process_question(payload: dict):
         async with httpx.AsyncClient(timeout=120) as cli:
             r = await cli.post(f"{OLLAMA}/api/generate", json={
                 "model": MODEL,
-                "prompt": f"<s>[INST] {question} [/INST]",
-                "system": SYS_PROMPT,
+                "prompt": f"{SYS_PROMPT}\n\nPregunta: {question}\nRespuesta:",
                 "options": {"temperature": TEMP, "num_predict": MAX_TOK},
                 "stream": False
             })
         r.raise_for_status()
         data = r.json()
-        llm_answer = data.get("response", "")
+        llm_answer = data.get("response", "").strip()
+        if not llm_answer:
+            logger.error(f"Ollama devolvió sin 'response': {data}")
+            return
     except Exception as e:
         logger.error(" Error llamando a Ollama: %s", e)
         llm_answer = ""
@@ -97,6 +99,7 @@ async def process_question(payload: dict):
         "question_id": question_id,
         "question": question,
         "llm_answer": llm_answer,
+        "reference_answer": None,
         "cached": False,
         "latency_ms": latency_ms,
         "model": MODEL,
@@ -104,7 +107,7 @@ async def process_question(payload: dict):
     }
 
     await producer.send_and_wait(TOPIC_OUT, out_msg)
-    logger.info(" 📤 Publicada respuesta para %s", interaction_id)
+    logger.info(" Publicada respuesta para %s", interaction_id)
 
 
 # --- Loop de consumo ---
@@ -117,7 +120,7 @@ async def consume_loop():
         value_deserializer=lambda v: json.loads(v.decode("utf-8"))
     )
     await consumer.start()
-    logger.info(f" 🟢 Consumidor escuchando en {TOPIC_IN}")
+    logger.info(f"  Consumidor escuchando en {TOPIC_IN}")
 
     try:
         async for msg in consumer:

@@ -27,18 +27,16 @@ def load_csv(path):
     try:
         with open(path, newline='', encoding='utf-8') as f:
             rdr = csv.reader(f)
-            for r in rdr:
-                # adaptamos: si CSV tiene 4 campos: topic,title,body,best_answer
+            for i, r in enumerate(rdr, start=1):
                 if len(r) >= 4:
-                    # generate an int id if not present
                     rows.append({
-                        "question_id": None,
+                        "question_id": i,
                         "question": r[2] or r[1],
                         "reference_answer": r[3]
                     })
                 elif len(r) == 3:
                     rows.append({
-                        "question_id": None,
+                        "question_id": i,
                         "question": r[1],
                         "reference_answer": r[2]
                     })
@@ -54,23 +52,26 @@ def load_csv(path):
 
 @app.on_event("startup")
 async def startup():
-    global producer, QUESTIONS, RUN_TASK
+    global QUESTIONS, RUN_TASK
     QUESTIONS = load_csv(CSV_PATH)
-    producer = AIOKafkaProducer(
+
+    # Guardamos el producer en app.state
+    app.state.producer = AIOKafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP,
         value_serializer=lambda v: json.dumps(v).encode("utf-8")
     )
-    await producer.start()
+    await app.state.producer.start()
+
     if AUTOSTART and RUN_TASK is None:
         RUN_TASK = asyncio.create_task(run_generator())
 
 @app.on_event("shutdown")
 async def shutdown():
-    global producer, RUN_TASK
+    global RUN_TASK
     if RUN_TASK:
         RUN_TASK.cancel()
-    if producer:
-        await producer.stop()
+    if hasattr(app.state, "producer"):
+        await app.state.producer.stop()
 
 async def send_one(i:int):
     q = random.choice(QUESTIONS)
@@ -89,12 +90,23 @@ async def loop_poisson(stop_at: float):
         await asyncio.sleep(random.expovariate(RATE))
         await send_one(i)
         i += 1
+async def loop_uniform(stop_at: float):
+    i = 0
+    while time.time() < stop_at:
+        await asyncio.sleep(random.uniform(0, 2.0 / RATE))  # uniforme en [0, 2λ^-1]
+        await send_one(i)
+        i += 1
 
 async def run_generator():
     stop_at = time.time() + DURATION
-    tasks = [asyncio.create_task(loop_poisson(stop_at)) for _ in range(CONCURRENCY)]
+    if DIST == "poisson":
+        tasks = [asyncio.create_task(loop_poisson(stop_at)) for _ in range(CONCURRENCY)]
+    elif DIST == "uniform":
+        tasks = [asyncio.create_task(loop_uniform(stop_at)) for _ in range(CONCURRENCY)]
+    else:
+        raise ValueError(f"Distribución {DIST} no soportada")
     await asyncio.gather(*tasks)
-
+    
 @app.post("/start")
 async def start_traffic():
     global RUN_TASK
@@ -103,6 +115,16 @@ async def start_traffic():
     RUN_TASK = asyncio.create_task(run_generator())
     return {"running": True}
 
+
+@app.post("/ask")
+async def ask(payload: dict):
+    global producer
+    if not producer:
+        return {"ok": False, "error": "Producer not initialized"}
+    await producer.send_and_wait(TOPIC_REQUESTS, payload)
+    return {"ok": True, "sent": payload}
+
 @app.get("/health")
 def health():
     return {"ok": True, "topic_requests": TOPIC_REQUESTS, "bootstrap": KAFKA_BOOTSTRAP}
+
