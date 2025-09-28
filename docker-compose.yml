@@ -103,8 +103,12 @@ services:
   traffic:
     build: ./Servicios/Traffic
     command: uvicorn app:app --host 0.0.0.0 --port 8010
+    volumes:
+      - ./data:/data
     environment:
-      - SAMPLE_LIMIT=60000
+      - CSV_PATH=/data/test.csv
+      - AUTOSTART=0
+      - SAMPLE_LIMIT=20000
       - DIST=poisson
       - RATE=1.0
       - CONCURRENCY=1

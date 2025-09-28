@@ -6,3 +6,5 @@ sentence-transformers==2.2.2
 huggingface-hub==0.14.1
 numpy==1.26.2
 aiokafka==0.10.0
+rouge-score
+bert-score

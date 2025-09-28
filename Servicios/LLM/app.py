@@ -21,7 +21,7 @@ OLLAMA = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 MODEL  = os.getenv("LLM_MODEL", "llama3.1:8b-instruct-q4_K_M")
 MAX_TOK = int(os.getenv("LLM_MAX_TOKENS", "512"))
 TEMP    = float(os.getenv("LLM_TEMPERATURE", "0.2"))
-SYS_PROMPT = os.getenv("SYS_PROMPT", "Eres un asistente conciso y factual. Responde en español.")
+SYS_PROMPT = os.getenv("SYS_PROMPT", "You are a concise and factual assistant. Answer in English")
 
 # Variables globales
 producer: AIOKafkaProducer | None = None
@@ -89,7 +89,7 @@ async def call_ollama_stream(prompt: str, model: str) -> str:
                     if data.get("done", False):
                         break
                 except Exception as e:
-                    logger.warning("⚠️ Error parseando línea de Ollama: %s | %s", e, line)
+                    logger.warning("Error parseando línea de Ollama: %s | %s", e, line)
             return "".join(answer_parts)
 
 
