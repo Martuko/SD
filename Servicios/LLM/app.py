@@ -98,6 +98,7 @@ async def process_question(payload: dict):
     interaction_id = payload.get("id")
     question = payload.get("question", "")
     question_id = payload.get("question_id")
+    reference_answer = payload.get("reference_answer")  
     ts_start = time.perf_counter()
 
     try:
@@ -116,12 +117,19 @@ async def process_question(payload: dict):
         "question_id": question_id,
         "question": question,
         "llm_answer": llm_answer,
-        "reference_answer": None,
+        "reference_answer": reference_answer,   
         "cached": False,
         "latency_ms": latency_ms,
         "model": MODEL,
         "ts_answered": datetime.utcnow().isoformat()
     }
+
+    if producer:
+        await producer.send_and_wait(TOPIC_OUT, out_msg)
+        logger.info(" Publicada respuesta para %s", interaction_id)
+    else:
+        logger.error("Producer no disponible, no se pudo enviar la respuesta")
+
 
     if producer:
         await producer.send_and_wait(TOPIC_OUT, out_msg)

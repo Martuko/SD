@@ -26,21 +26,30 @@ def load_csv(path):
     rows = []
     try:
         with open(path, newline='', encoding='utf-8') as f:
-            rdr = csv.reader(f)
+            rdr = csv.reader(f, delimiter=",", quotechar='"')
             for i, r in enumerate(rdr, start=1):
-                # dataset formats handled
                 if len(r) >= 4:
-                    rows.append({"question_id": i, "question": r[2] or r[1], "reference_answer": r[3]})
-                elif len(r) == 3:
-                    rows.append({"question_id": i, "question": r[1], "reference_answer": r[2]})
+                    # usa content si no está vacío, si no, el título
+                    question = r[2].strip() if r[2].strip() else r[1].strip()
+                    reference = r[3].strip()
+                    rows.append({
+                        "question_id": i,
+                        "question": question,
+                        "reference_answer": reference
+                    })
         return rows
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] load_csv: {e}")
         return []
+
 
 @app.on_event("startup")
 async def startup():
     global QUESTIONS, producer, RUN_TASK
     QUESTIONS = load_csv(CSV_PATH)
+    print(f"Traffic cargó {len(QUESTIONS)} preguntas de {CSV_PATH}")
+    for q in QUESTIONS[:5]:
+        print(f"Ejemplo: {q}")
     producer = AIOKafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP,
         value_serializer=lambda v: json.dumps(v).encode("utf-8")
@@ -74,14 +83,12 @@ async def send_one(i:int):
 async def loop_poisson(stop_at: float):
     i = 0
     while time.time() < stop_at:
-        # expovariate with lambda = RATE: mean inter-arrival = 1/RATE
         await asyncio.sleep(random.expovariate(RATE))
         await send_one(i)
         i += 1
 
 async def loop_uniform(stop_at: float):
     i = 0
-    # uniform interval chosen such that expected rate ~ RATE
     while time.time() < stop_at:
         await asyncio.sleep(random.uniform(0, 2.0 / RATE))
         await send_one(i)
@@ -98,12 +105,20 @@ async def run_generator():
     await asyncio.gather(*tasks)
 
 @app.post("/start")
-async def start_traffic():
-    global RUN_TASK
+async def start_traffic(cfg: dict = {}):
+    global RUN_TASK, DIST, RATE, CONCURRENCY, DURATION, RUN_ID
     if RUN_TASK and not RUN_TASK.done():
         return {"running": True}
+
+    DIST = cfg.get("distribution", DIST)
+    RATE = float(cfg.get("rate", RATE))
+    CONCURRENCY = int(cfg.get("concurrency", CONCURRENCY))
+    DURATION = int(cfg.get("duration", DURATION))
+    RUN_ID = cfg.get("run_id", RUN_ID)
+
     RUN_TASK = asyncio.create_task(run_generator())
-    return {"running": True}
+    return {"running": True, "dist": DIST, "rate": RATE, "concurrency": CONCURRENCY, "duration": DURATION, "run_id": RUN_ID}
+
 
 @app.post("/ask")
 async def ask(payload: dict):

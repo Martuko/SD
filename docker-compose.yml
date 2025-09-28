@@ -110,9 +110,9 @@ services:
       - AUTOSTART=0
       - SAMPLE_LIMIT=20000
       - DIST=poisson
-      - RATE=1.0
-      - CONCURRENCY=1
-      - DURATION=60
+      - RATE=5.0
+      - CONCURRENCY=4
+      - DURATION=3600
     depends_on:
       - init-topics
       - kafka
