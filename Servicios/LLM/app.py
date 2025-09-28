@@ -68,7 +68,32 @@ async def connect_to_kafka_with_retry():
                 return False
 
 
-# --- Procesar una pregunta con Ollama ---
+# --- Llamada a Ollama en streaming ---
+async def call_ollama_stream(prompt: str, model: str) -> str:
+    """Llamar a Ollama y concatenar streaming"""
+    async with httpx.AsyncClient(timeout=None) as client:
+        async with client.stream("POST", f"{OLLAMA}/api/generate", json={
+            "model": model,
+            "prompt": prompt,
+            "options": {"temperature": TEMP, "num_predict": MAX_TOK},
+            "stream": True
+        }) as resp:
+            answer_parts = []
+            async for line in resp.aiter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    if "response" in data:
+                        answer_parts.append(data["response"])
+                    if data.get("done", False):
+                        break
+                except Exception as e:
+                    logger.warning("⚠️ Error parseando línea de Ollama: %s | %s", e, line)
+            return "".join(answer_parts)
+
+
+# --- Procesar una pregunta ---
 async def process_question(payload: dict):
     interaction_id = payload.get("id")
     question = payload.get("question", "")
@@ -76,19 +101,11 @@ async def process_question(payload: dict):
     ts_start = time.perf_counter()
 
     try:
-        async with httpx.AsyncClient(timeout=120) as cli:
-            r = await cli.post(f"{OLLAMA}/api/generate", json={
-                "model": MODEL,
-                "prompt": f"{SYS_PROMPT}\n\nPregunta: {question}\nRespuesta:",
-                "options": {"temperature": TEMP, "num_predict": MAX_TOK},
-                "stream": False
-            })
-        r.raise_for_status()
-        data = r.json()
-        llm_answer = data.get("response", "").strip()
-        if not llm_answer:
-            logger.error(f"Ollama devolvió sin 'response': {data}")
-            return
+        llm_answer = await call_ollama_stream(
+            f"{SYS_PROMPT}\n\nPregunta: {question}\nRespuesta:", MODEL
+        )
+        if not llm_answer.strip():
+            logger.error(f"Ollama devolvió sin 'response': {llm_answer}")
     except Exception as e:
         logger.error(" Error llamando a Ollama: %s", e)
         llm_answer = ""
@@ -106,8 +123,11 @@ async def process_question(payload: dict):
         "ts_answered": datetime.utcnow().isoformat()
     }
 
-    await producer.send_and_wait(TOPIC_OUT, out_msg)
-    logger.info(" Publicada respuesta para %s", interaction_id)
+    if producer:
+        await producer.send_and_wait(TOPIC_OUT, out_msg)
+        logger.info(" Publicada respuesta para %s", interaction_id)
+    else:
+        logger.error("Producer no disponible, no se pudo enviar la respuesta")
 
 
 # --- Loop de consumo ---

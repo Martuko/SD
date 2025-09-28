@@ -55,7 +55,6 @@ async def startup():
     global QUESTIONS, RUN_TASK
     QUESTIONS = load_csv(CSV_PATH)
 
-    # Guardamos el producer en app.state
     app.state.producer = AIOKafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP,
         value_serializer=lambda v: json.dumps(v).encode("utf-8")
@@ -82,7 +81,7 @@ async def send_one(i:int):
         "reference_answer": q.get("reference_answer"),
         "ts_generated": datetime.utcnow().isoformat()
     }
-    await producer.send_and_wait(TOPIC_REQUESTS, msg)
+    await app.state.producer.send_and_wait(TOPIC_REQUESTS, msg)
 
 async def loop_poisson(stop_at: float):
     i = 0
@@ -119,9 +118,9 @@ async def start_traffic():
 @app.post("/ask")
 async def ask(payload: dict):
     global producer
-    if not producer:
+    if not hasattr(app.state, "producer"):
         return {"ok": False, "error": "Producer not initialized"}
-    await producer.send_and_wait(TOPIC_REQUESTS, payload)
+    await app.state.producer.send_and_wait(TOPIC_REQUESTS, payload)
     return {"ok": True, "sent": payload}
 
 @app.get("/health")
