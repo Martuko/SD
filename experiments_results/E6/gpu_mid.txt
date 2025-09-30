@@ -1,0 +1,66 @@
+
+==============NVSMI LOG==============
+
+Timestamp                                 : Tue Sep 30 19:02:20 2025
+Driver Version                            : 570.172.08
+CUDA Version                              : 12.8
+
+Attached GPUs                             : 1
+GPU 00000000:01:00.0
+    FB Memory Usage
+        Total                             : 12282 MiB
+        Reserved                          : 406 MiB
+        Used                              : 4128 MiB
+        Free                              : 7749 MiB
+    BAR1 Memory Usage
+        Total                             : 256 MiB
+        Used                              : 19 MiB
+        Free                              : 237 MiB
+    Conf Compute Protected Memory Usage
+        Total                             : 0 MiB
+        Used                              : 0 MiB
+        Free                              : 0 MiB
+    Utilization
+        GPU                               : 63 %
+        Memory                            : 58 %
+        Encoder                           : 0 %
+        Decoder                           : 0 %
+        JPEG                              : 0 %
+        OFA                               : 0 %
+    GPU Utilization Samples
+        Duration                          : 14.00 sec
+        Number of Samples                 : 71
+        Max                               : 91 %
+        Min                               : 24 %
+        Avg                               : 79 %
+    Memory Utilization Samples
+        Duration                          : 14.00 sec
+        Number of Samples                 : 71
+        Max                               : 86 %
+        Min                               : 22 %
+        Avg                               : 73 %
+    ENC Utilization Samples
+        Duration                          : 14.00 sec
+        Number of Samples                 : 71
+        Max                               : 0 %
+        Min                               : 0 %
+        Avg                               : 0 %
+    DEC Utilization Samples
+        Duration                          : 14.00 sec
+        Number of Samples                 : 71
+        Max                               : 0 %
+        Min                               : 0 %
+        Avg                               : 0 %
+    JPG Utilization Samples
+        Duration                          : 14.00 sec
+        Number of Samples                 : 71
+        Max                               : 0 %
+        Min                               : 0 %
+        Avg                               : 0 %
+    OFA Utilization Samples
+        Duration                          : 14.00 sec
+        Number of Samples                 : 71
+        Max                               : 0 %
+        Min                               : 0 %
+        Avg                               : 0 %
+
