@@ -1,0 +1,2 @@
+total,answered_any,answer_rate_any,cache_hits,cache_misses,cache_hit_rate,avg_latency,avg_score
+10000,10000,100.00,201,9799,2.01,3294750.09,0.184

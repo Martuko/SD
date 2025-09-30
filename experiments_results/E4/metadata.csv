@@ -1,0 +1,2 @@
+name,distribution,policy,max_entries,rate,concurrency,pool_size,sample_limit,timestamp
+E4,uniform,allkeys-lfu,5000,5,2,30000,10000,2025-09-30T15:34:34-03:00
