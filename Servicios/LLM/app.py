@@ -1,114 +1,110 @@
-# app.py  (Servicio LLM)
+# Servicios/LLM/app.py
 from fastapi import FastAPI
 import os, time, asyncio, httpx, json, logging
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from datetime import datetime
 
-# Configuración de logs
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("llm")
 
-# FastAPI app
 app = FastAPI(title="LLM Service")
 
-# === Configuración Kafka ===
+# Kafka
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
 TOPIC_IN = os.getenv("TOPIC_LLM", "questions.llm")
 TOPIC_OUT = os.getenv("TOPIC_ANSWERS", "questions.answers")
 
-# === Configuración Ollama ===
+# Ollama
 OLLAMA = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 MODEL  = os.getenv("LLM_MODEL", "llama3.1:8b-instruct-q4_K_M")
 MAX_TOK = int(os.getenv("LLM_MAX_TOKENS", "512"))
 TEMP    = float(os.getenv("LLM_TEMPERATURE", "0.2"))
-SYS_PROMPT = os.getenv("SYS_PROMPT", "You are a concise and factual assistant. Answer in English")
+SYS_PROMPT = os.getenv("SYS_PROMPT", "You are a concise and factual assistant. Answer in English.")
+LLM_CONCURRENCY = int(os.getenv("LLM_CONCURRENCY", "2"))
 
-# Variables globales
 producer: AIOKafkaProducer | None = None
 consumer: AIOKafkaConsumer | None = None
 kafka_ready = asyncio.Event()
-consumption_task = None
+consumption_task: asyncio.Task | None = None
+llm_sem = asyncio.Semaphore(LLM_CONCURRENCY)
 
-
-# --- Conexión con reintentos ---
 async def connect_to_kafka_with_retry():
-    """Conectar a Kafka con reintentos"""
     global producer
-    max_retries = 15
-    retry_delay = 5
-
-    for attempt in range(max_retries):
+    for attempt in range(1, 16):
         try:
-            logger.info(f" Intentando conectar a Kafka... Intento {attempt + 1}/{max_retries}")
-
             producer = AIOKafkaProducer(
                 bootstrap_servers=KAFKA_BOOTSTRAP,
                 value_serializer=lambda v: json.dumps(v).encode("utf-8")
             )
             await producer.start()
-
-            # Verificar bootstrap
             await producer.client.bootstrap()
-            logger.info(" Conexión a Kafka establecida exitosamente")
+            logger.info("Conexión a Kafka establecida")
             kafka_ready.set()
             return True
-
         except Exception as e:
-            logger.warning(f"  Intento {attempt + 1} falló: {e}")
-
+            logger.warning(f"Intento Kafka {attempt}/15 falló: {e}")
             if producer:
                 await producer.stop()
                 producer = None
+            await asyncio.sleep(5)
+    return False
 
-            if attempt < max_retries - 1:
-                logger.info(f"Reintentando en {retry_delay} segundos...")
-                await asyncio.sleep(retry_delay)
-            else:
-                logger.error("  No se pudo conectar a Kafka después de todos los intentos")
-                return False
-
-
-# --- Llamada a Ollama en streaming ---
 async def call_ollama_stream(prompt: str, model: str) -> str:
-    """Llamar a Ollama y concatenar streaming"""
-    async with httpx.AsyncClient(timeout=None) as client:
-        async with client.stream("POST", f"{OLLAMA}/api/generate", json={
-            "model": model,
-            "prompt": prompt,
-            "options": {"temperature": TEMP, "num_predict": MAX_TOK},
-            "stream": True
-        }) as resp:
-            answer_parts = []
-            async for line in resp.aiter_lines():
-                if not line.strip():
-                    continue
-                try:
-                    data = json.loads(line)
-                    if "response" in data:
-                        answer_parts.append(data["response"])
-                    if data.get("done", False):
-                        break
-                except Exception as e:
-                    logger.warning("Error parseando línea de Ollama: %s | %s", e, line)
-            return "".join(answer_parts)
+    async with llm_sem:
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("POST", f"{OLLAMA}/api/generate", json={
+                    "model": model,
+                    "prompt": prompt,
+                    "options": {"temperature": TEMP, "num_predict": MAX_TOK},
+                    "stream": True
+                }) as resp:
+                    resp.raise_for_status()
+                    parts = []
+                    async for line in resp.aiter_lines():
+                        if not line or not line.strip():
+                            continue
+                        try:
+                            data = json.loads(line)
+                            if "response" in data:
+                                parts.append(data["response"])
+                            if data.get("done", False):
+                                break
+                        except Exception:
+                            # línea parcial: ignorar
+                            pass
+                    return "".join(parts)
+        except Exception as e:
+            logger.error(f"Streaming error: {e}. Falling back to non-streaming.")
+            # Fallback no streaming
+            try:
+                async with httpx.AsyncClient(timeout=None) as client:
+                    r = await client.post(f"{OLLAMA}/api/generate", json={
+                        "model": model,
+                        "prompt": prompt,
+                        "options": {"temperature": TEMP, "num_predict": MAX_TOK},
+                        "stream": False
+                    })
+                    r.raise_for_status()
+                    data = r.json()
+                    return data.get("response", "")
+            except Exception as e2:
+                logger.error(f"Ollama non-streaming failed: {e2}")
+                return ""
 
-
-# --- Procesar una pregunta ---
 async def process_question(payload: dict):
     interaction_id = payload.get("id")
     question = payload.get("question", "")
     question_id = payload.get("question_id")
-    reference_answer = payload.get("reference_answer")  
+    reference_answer = payload.get("reference_answer")
     ts_start = time.perf_counter()
 
     try:
         llm_answer = await call_ollama_stream(
             f"{SYS_PROMPT}\n\nPregunta: {question}\nRespuesta:", MODEL
         )
-        if not llm_answer.strip():
-            logger.error(f"Ollama devolvió sin 'response': {llm_answer}")
     except Exception as e:
-        logger.error(" Error llamando a Ollama: %s", e)
+        logger.error("Error llamando a Ollama: %s", e)
         llm_answer = ""
 
     latency_ms = int((time.perf_counter() - ts_start) * 1000)
@@ -116,29 +112,22 @@ async def process_question(payload: dict):
         "id": interaction_id,
         "question_id": question_id,
         "question": question,
-        "llm_answer": llm_answer,
-        "reference_answer": reference_answer,   
+        "llm_answer": llm_answer or "",
+        "reference_answer": reference_answer or "",
         "cached": False,
         "latency_ms": latency_ms,
         "model": MODEL,
-        "ts_answered": datetime.utcnow().isoformat()
+        "ts_answered": datetime.utcnow().isoformat(),
+        "dist_label": payload.get("dist_label"),
+        "rate": payload.get("rate"),
     }
 
     if producer:
         await producer.send_and_wait(TOPIC_OUT, out_msg)
-        logger.info(" Publicada respuesta para %s", interaction_id)
+        logger.info("Publicada respuesta para %s", interaction_id)
     else:
         logger.error("Producer no disponible, no se pudo enviar la respuesta")
 
-
-    if producer:
-        await producer.send_and_wait(TOPIC_OUT, out_msg)
-        logger.info(" Publicada respuesta para %s", interaction_id)
-    else:
-        logger.error("Producer no disponible, no se pudo enviar la respuesta")
-
-
-# --- Loop de consumo ---
 async def consume_loop():
     global consumer
     consumer = AIOKafkaConsumer(
@@ -148,26 +137,20 @@ async def consume_loop():
         value_deserializer=lambda v: json.loads(v.decode("utf-8"))
     )
     await consumer.start()
-    logger.info(f"  Consumidor escuchando en {TOPIC_IN}")
-
+    logger.info(f"Consumidor escuchando en {TOPIC_IN}")
     try:
         async for msg in consumer:
-            payload = msg.value
-            asyncio.create_task(process_question(payload))
+            asyncio.create_task(process_question(msg.value))
     finally:
         await consumer.stop()
 
-
-# --- Eventos FastAPI ---
 @app.on_event("startup")
 async def startup():
     ok = await connect_to_kafka_with_retry()
     if not ok:
-        raise RuntimeError("Kafka no disponible después de varios intentos")
-
+        raise RuntimeError("Kafka no disponible")
     global consumption_task
     consumption_task = asyncio.create_task(consume_loop())
-
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -179,8 +162,6 @@ async def shutdown():
     if producer:
         await producer.stop()
 
-
-# --- Health check ---
 @app.get("/health")
 async def health():
     return {
@@ -188,5 +169,6 @@ async def health():
         "topic_in": TOPIC_IN,
         "topic_out": TOPIC_OUT,
         "ollama": OLLAMA,
-        "model": MODEL
+        "model": MODEL,
+        "concurrency": LLM_CONCURRENCY
     }

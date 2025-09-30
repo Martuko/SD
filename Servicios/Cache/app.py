@@ -1,10 +1,11 @@
+# Servicios/Cache/app.py
 from fastapi import FastAPI
-import asyncio, os, json, time, logging, hashlib, re
+import asyncio, os, json, time, logging, hashlib, re, unicodedata
 import redis.asyncio as aioredis
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from datetime import datetime
 
-# Config
+# === Configuración ===
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
 TOPIC_REQUESTS = os.getenv("TOPIC_REQUESTS", "questions.requests")
 TOPIC_LLM = os.getenv("TOPIC_LLM", "questions.llm")
@@ -12,34 +13,41 @@ TOPIC_ANSWERS = os.getenv("TOPIC_ANSWERS", "questions.answers")
 TOPIC_CACHE_UPDATE = os.getenv("TOPIC_CACHE_UPDATE", "cache.update")
 TOPIC_CACHE_METRICS = os.getenv("TOPIC_CACHE_METRICS", "cache.metrics")
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-CACHE_TTL = int(os.getenv("CACHE_TTL", "86400"))
+# Redis URL o componentes
+REDIS_URL = os.getenv("REDIS_URL")
+if not REDIS_URL:
+    rhost = os.getenv("REDIS_HOST", "redis")
+    rport = os.getenv("REDIS_PORT", "6379")
+    rdb   = os.getenv("REDIS_DB", "0")
+    REDIS_URL = f"redis://{rhost}:{rport}/{rdb}"
+
+CACHE_TTL = int(os.getenv("CACHE_TTL", "86400"))  # 24h por defecto
 CACHE_MAX_ENTRIES = int(os.getenv("CACHE_MAX_ENTRIES", "5000"))
-CACHE_POLICY = os.getenv("REDIS_POLICY", "allkeys-lru")  # lru, lfu, fifo
+CACHE_POLICY = os.getenv("CACHE_POLICY", os.getenv("REDIS_POLICY", "allkeys-lru"))  # lru/lfu/fifo
 
 app = FastAPI(title="Cache Service")
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("cache")
 
-producer = None
-consumer = None
-consumer_update = None
+producer: AIOKafkaProducer | None = None
+consumer: AIOKafkaConsumer | None = None
+consumer_update: AIOKafkaConsumer | None = None
 redis = None
 
-# --------- utils -------------
+# === Utils ===
 def normalize_question(q: str) -> str:
-    q = q or ""
-    q = q.strip().lower()
+    q = (q or "").strip().lower()
+    q = unicodedata.normalize("NFKC", q)
     q = re.sub(r"\s+", " ", q)
+    # permitir letras con tildes, numeros, guion y espacio
     q = re.sub(r"[^\w\sñáéíóúü-]", "", q, flags=re.UNICODE)
     return q
 
-def key_from(payload: dict) -> str:
-    qid = payload.get("question_id")
-    if qid is not None:
-        return f"qid:{qid}"
+def key_from(payload: dict) -> str | None:
     q = normalize_question(payload.get("question", ""))
+    if not q:
+        return None
     h = hashlib.sha256(q.encode("utf-8")).hexdigest()
     return f"qhash:{h}"
 
@@ -54,7 +62,7 @@ async def enforce_fifo():
             logger.info(f"FIFO evicted {victim}")
         sz = await redis.zcard("cache_queue")
 
-# --------- startup/shutdown -------------
+# === Startup/Shutdown ===
 async def connect_to_kafka_with_retry():
     max_retries, retry_delay = 15, 5
     for attempt in range(max_retries):
@@ -72,12 +80,11 @@ async def startup_event():
     global redis, producer, consumer, consumer_update
     redis = aioredis.from_url(REDIS_URL, decode_responses=True)
 
-    # Config Redis policy
     try:
-        if CACHE_POLICY in ["allkeys-lru", "allkeys-lfu"]:
-            await redis.config_set("maxmemory-policy", CACHE_POLICY)
-            await redis.config_set("maxmemory", os.getenv("REDIS_MAXMEMORY", "100mb"))
-        logger.info(f"Cache policy set to {CACHE_POLICY}")
+        await redis.config_set("maxmemory-policy", CACHE_POLICY)
+        est_mem = CACHE_MAX_ENTRIES * 20_000  # estimado ~20KB por respuesta
+        await redis.config_set("maxmemory", f"{est_mem}b")
+        logger.info(f"Cache policy={CACHE_POLICY}, max_entries={CACHE_MAX_ENTRIES}, maxmemory≈{est_mem/1e6:.1f}MB")
     except Exception as e:
         logger.warning(f"Could not config Redis: {e}")
 
@@ -117,51 +124,70 @@ async def shutdown():
     if producer: await producer.stop()
     if redis: await redis.close()
 
-# --------- consumers -------------
+# === Consumers ===
 async def consume_requests_loop():
     async for msg in consumer:
         data = msg.value
-        qid, question = data.get("question_id"), data.get("question","")
         k = key_from(data)
+        if not k:
+            continue
         t0 = time.perf_counter()
-        cached = await redis.get(k)
-        hit = bool(cached)
+        cached_payload = await redis.get(k)
+        hit = bool(cached_payload)
         if hit:
-            final = json.loads(cached)
+            try:
+                final = json.loads(cached_payload)
+                fa = (final or {}).get("final_answer", "") or ""
+            except Exception:
+                fa = ""
             resp = {
                 "id": data.get("id"),
-                "question_id": qid,
-                "question": question,
-                "final_answer": final.get("final_answer"),
+                "question_id": data.get("question_id"),
+                "question": data.get("question"),
+                "final_answer": fa,
                 "cached": True,
                 "latency_ms": int((time.perf_counter()-t0)*1000),
-                "ts_answered": datetime.utcnow().isoformat()
+                "model": "cache",
+                "ts_answered": datetime.utcnow().isoformat(),
+                "dist_label": data.get("dist_label"),
+                "rate": data.get("rate"),
             }
             await producer.send_and_wait(TOPIC_ANSWERS, resp)
         else:
             await producer.send_and_wait(TOPIC_LLM, data)
 
-        # métricas
         metric = {
             "experiment": os.getenv("EXPERIMENT_ID","default"),
             "key": k, "hit": hit,
             "latency_ms": int((time.perf_counter()-t0)*1000),
             "ts": datetime.utcnow().isoformat()
         }
-        await producer.send_and_wait(TOPIC_CACHE_METRICS, metric)
+        try:
+            await producer.send_and_wait(TOPIC_CACHE_METRICS, metric)
+        except Exception:
+            pass
 
 async def consume_updates_loop():
     async for msg in consumer_update:
         data = msg.value
         k = key_from(data)
-        final_answer = data.get("final_answer") or data.get("llm_answer") or data.get("reference_answer")
-        if k and final_answer:
-            payload = {"final_answer": final_answer, "ts": data.get("ts_scored")}
-            await redis.set(k, json.dumps(payload), ex=CACHE_TTL)
-            if CACHE_POLICY == "fifo":
-                await redis.zadd("cache_queue", {k: time.time()})
-                await enforce_fifo()
+        if not k:
+            continue
+        final_answer = (data.get("final_answer") or data.get("llm_answer") or data.get("reference_answer") or "").strip()
+        if not final_answer:
+            logger.warning(f"Ignoring cache.update with empty final_answer for {data.get('question_id')}")
+            continue
+        payload = {"final_answer": final_answer, "ts": data.get("ts_scored")}
+        await redis.set(k, json.dumps(payload), ex=CACHE_TTL)
+        if CACHE_POLICY == "fifo":
+            await redis.zadd("cache_queue", {k: time.time()})
+            await enforce_fifo()
 
 @app.get("/health")
-def health():
-    return {"ok": True, "policy": CACHE_POLICY}
+async def health():
+    zsz = 0
+    try:
+        zsz = await redis.zcard("cache_queue")
+    except Exception:
+        pass
+    return {"ok": True, "policy": CACHE_POLICY, "max_entries": CACHE_MAX_ENTRIES, "fifo_size": zsz}

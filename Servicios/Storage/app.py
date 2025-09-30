@@ -1,3 +1,4 @@
+# Servicios/Storage/app.py
 from fastapi import FastAPI
 import os, asyncio, json, uuid
 from aiokafka import AIOKafkaConsumer
@@ -41,11 +42,13 @@ async def persist_interaction(pool, payload: dict):
             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,1,now(),
                    $13,$14,$15,$16)
             ON CONFLICT (id) DO UPDATE
-            SET times_asked = interactions.times_asked + 1;
+            SET times_asked = interactions.times_asked + 1,
+                final_answer = CASE WHEN EXCLUDED.final_answer IS NOT NULL AND EXCLUDED.final_answer <> '' THEN EXCLUDED.final_answer ELSE interactions.final_answer END,
+                cached = EXCLUDED.cached;
             """,
             iid, qid, qtxt, ref_ans,
             payload.get("llm_answer"), payload.get("final_answer"),
-            payload.get("cached", False), payload.get("latency_ms"),
+            bool(payload.get("cached", False)), payload.get("latency_ms"),
             payload.get("score"), payload.get("model"),
             payload.get("dist_label"), payload.get("rate"),
             payload.get("score_cosine"), payload.get("score_rouge1"),
@@ -60,11 +63,14 @@ async def consume_loop(pool):
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
     )
     await consumer.start()
-    async for msg in consumer:
-        try:
-            await persist_interaction(pool, msg.value)
-        except Exception as e:
-            print("persist error:", e, "payload:", msg.value)
+    try:
+        async for msg in consumer:
+            try:
+                await persist_interaction(pool, msg.value)
+            except Exception as e:
+                print("persist error:", e, "payload:", msg.value)
+    finally:
+        await consumer.stop()
 
 @app.on_event("startup")
 async def startup():
@@ -103,6 +109,10 @@ async def startup():
             );
             """
         )
+        # índices útiles para análisis
+        await con.execute('CREATE INDEX IF NOT EXISTS idx_interactions_cached ON interactions(cached);')
+        await con.execute('CREATE INDEX IF NOT EXISTS idx_interactions_created ON interactions(created_at);')
+        await con.execute('CREATE INDEX IF NOT EXISTS idx_interactions_qid ON interactions(question_id);')
     asyncio.create_task(consume_loop(app.state.pool))
 
 @app.on_event("shutdown")
