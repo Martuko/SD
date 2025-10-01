@@ -1,4 +1,3 @@
-# Servicios/Storage/app.py
 from fastapi import FastAPI
 import os, asyncio, json, uuid
 from aiokafka import AIOKafkaConsumer
@@ -109,7 +108,6 @@ async def startup():
             );
             """
         )
-        # índices útiles para análisis
         await con.execute('CREATE INDEX IF NOT EXISTS idx_interactions_cached ON interactions(cached);')
         await con.execute('CREATE INDEX IF NOT EXISTS idx_interactions_created ON interactions(created_at);')
         await con.execute('CREATE INDEX IF NOT EXISTS idx_interactions_qid ON interactions(question_id);')

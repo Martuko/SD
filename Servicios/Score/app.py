@@ -1,16 +1,13 @@
-# Servicios/Score/app.py
 from fastapi import FastAPI
 import os, asyncio, json, logging
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from datetime import datetime
 
-# Scores opcionales
 ENABLE_EMBEDDINGS = os.getenv("ENABLE_EMBEDDINGS", "1") == "1"
 ENABLE_ROUGE = os.getenv("ENABLE_ROUGE", "1") == "1"
 ENABLE_BERTSCORE = os.getenv("ENABLE_BERTSCORE", "0") == "1"
 SCORE_THRESHOLD = float(os.getenv("SCORE_THRESHOLD", "0.6"))
 
-# Cargas perezosas para acelerar arranque si están deshabilitados
 embedder = None
 rouge_s = None
 bert_score = None
@@ -25,7 +22,7 @@ if ENABLE_ROUGE:
     rouge_s = rouge_scorer.RougeScorer(['rouge1','rougeL'], use_stemmer=True)
 
 if ENABLE_BERTSCORE:
-    from bert_score import score as bert_score  # type: ignore
+    from bert_score import score as bert_score  
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("score")
@@ -64,14 +61,12 @@ async def calc_bert(ref, cand):
         return 0.0
 
 def choose_final_answer(ref: str, cand: str, score_combined: float) -> str:
-    # Regla del enunciado: si score < threshold => usar referencia; si no => LLM
+
     if cand.strip() and score_combined >= SCORE_THRESHOLD:
         return cand
-    # fallback robusto si ref viene vacía
     return cand if cand.strip() and not ref.strip() else ref
 
 async def process_msg(msg: dict):
-    # 1) Mensajes cacheados: sólo persistir, NO actualizar caché
     if msg.get("cached"):
         final_answer = (msg.get("final_answer") or "").strip()
         scored = {
@@ -97,7 +92,6 @@ async def process_msg(msg: dict):
         logger.info(f"Stored cached hit {msg.get('id')} without cache.update")
         return
 
-    # 2) Flujo normal
     ref = (msg.get("reference_answer") or "").strip()
     cand = (msg.get("llm_answer") or "").strip()
 
@@ -150,7 +144,6 @@ async def process_msg(msg: dict):
         "ts_scored": datetime.utcnow().isoformat()
     }
     await producer.send_and_wait(TOPIC_STORAGE, scored)
-    # actualizar caché sólo en miss
     await producer.send_and_wait(TOPIC_CACHE_UPDATE, scored)
     logger.info(f"Scored and updated cache for {msg.get('id')}")
 

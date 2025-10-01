@@ -3,9 +3,9 @@ set -euo pipefail
 
 RESULTS_DIR=experiments_results
 POOLS_DIR=data/pools
-SRC_CSV=data/test.csv         # CSV original (60k)
-POOL_TARGET=30000             # Tamaño del pool por experimento (30k)
-SAMPLES_TARGET=10000          # Solicitudes por experimento
+SRC_CSV=data/test.csv         
+POOL_TARGET=30000             
+SAMPLES_TARGET=10000          
 
 mkdir -p "$RESULTS_DIR" "$POOLS_DIR"
 
@@ -21,7 +21,6 @@ EXPERIMENTS=( EXP1 EXP2 EXP3 EXP4 EXP5 EXP6 )
 CONCURRENCY=2
 RATE=5
 
-# === Función: crear pool 30k determinístico por experimento ===
 make_pool() {
   local exp_name="$1"
   local dst="${POOLS_DIR}/${exp_name}.csv"
@@ -52,7 +51,7 @@ with open(dst, "w", newline='', encoding='utf-8') as f:
 PY
 }
 
-# === Snapshots ===
+
 snapshot_before() {
   local name="$1" ; local dist="$2" ; local policy="$3" ; local max_entries="$4" ; local EXP_DIR="$5"
   echo "📸 BEFORE snapshot → ${EXP_DIR}"
@@ -138,7 +137,6 @@ EOF
 
 snapshot_after() {
   local name="$1" ; local dist="$2" ; local policy="$3" ; local max_entries="$4" ; local EXP_DIR="$5"
-  echo "📸 AFTER snapshot → ${EXP_DIR}"
 
   docker exec -i sd-db-1 psql -U app -d qa -c \
     "COPY (SELECT * FROM interactions) TO STDOUT WITH CSV HEADER;" \
@@ -192,7 +190,7 @@ run_experiment() {
   local policy=$3
   local max_entries=${4:-5000}
 
-  echo "🚀 Iniciando experimento $name (Dist=$dist, Policy=$policy, MaxEntries=$max_entries, Target=$SAMPLES_TARGET)"
+  echo "Iniciando experimento $name (Dist=$dist, Policy=$policy, MaxEntries=$max_entries, Target=$SAMPLES_TARGET)"
   local EXP_DIR="$RESULTS_DIR/$name"
   mkdir -p "$EXP_DIR"
 
@@ -209,7 +207,7 @@ run_experiment() {
 
   snapshot_before "$name" "$dist" "$policy" "$max_entries" "$EXP_DIR"
 
-  echo "📤 Traffic /start con pool ${POOL_PATH} ..."
+  echo "Traffic /start con pool ${POOL_PATH} ..."
   curl -s -X POST http://localhost:8010/start \
     -H "Content-Type: application/json" \
     -d "{
@@ -225,7 +223,7 @@ run_experiment() {
         }" \
     > "$EXP_DIR/start_response.json"
 
-  echo "⏳ Esperando answered_any >= ${SAMPLES_TARGET} ..."
+  echo "Esperando answered_any >= ${SAMPLES_TARGET} ..."
   local MID_DONE=0
   local MID_TARGET=$(( SAMPLES_TARGET / 2 ))
 
@@ -240,26 +238,25 @@ run_experiment() {
     fi
 
     if [[ "$counts_trimmed" -ge "$SAMPLES_TARGET" ]]; then
-      echo "✅ Objetivo alcanzado: $counts_trimmed respuestas"
+      echo " Objetivo alcanzado: $counts_trimmed respuestas"
       break
     else
-      echo "⌛ Progreso: $counts_trimmed / $SAMPLES_TARGET respuestas"
+      echo " Progreso: $counts_trimmed / $SAMPLES_TARGET respuestas"
       sleep 30
     fi
   done
 
-  echo "🛑 Deteniendo el generador de tráfico..."
+  
   curl -s -X POST http://localhost:8010/stop > /dev/null || true
 
   snapshot_after "$name" "$dist" "$policy" "$max_entries" "$EXP_DIR"
 
-  echo "✅ Experimento $name finalizado"
+  echo "Experimento $name finalizado"
   echo "------------------------------------------------------"
 }
 
-# === Loop principal ===
 for EXP in "${EXPERIMENTS[@]}"; do
   eval "run_experiment \${${EXP}[name]} \${${EXP}[distribution]} \${${EXP}[policy]} \${${EXP}[max_entries]:-5000}"
 done
 
-echo "🎉 Todos los experimentos completados. Resultados en $RESULTS_DIR/"
+echo "Todos los experimentos completados. Resultados en $RESULTS_DIR/"

@@ -1,11 +1,9 @@
-# Servicios/Cache/app.py
 from fastapi import FastAPI
 import asyncio, os, json, time, logging, hashlib, re, unicodedata
 import redis.asyncio as aioredis
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from datetime import datetime
 
-# === Configuración ===
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
 TOPIC_REQUESTS = os.getenv("TOPIC_REQUESTS", "questions.requests")
 TOPIC_LLM = os.getenv("TOPIC_LLM", "questions.llm")
@@ -13,7 +11,6 @@ TOPIC_ANSWERS = os.getenv("TOPIC_ANSWERS", "questions.answers")
 TOPIC_CACHE_UPDATE = os.getenv("TOPIC_CACHE_UPDATE", "cache.update")
 TOPIC_CACHE_METRICS = os.getenv("TOPIC_CACHE_METRICS", "cache.metrics")
 
-# Redis URL o componentes
 REDIS_URL = os.getenv("REDIS_URL")
 if not REDIS_URL:
     rhost = os.getenv("REDIS_HOST", "redis")
@@ -21,9 +18,9 @@ if not REDIS_URL:
     rdb   = os.getenv("REDIS_DB", "0")
     REDIS_URL = f"redis://{rhost}:{rport}/{rdb}"
 
-CACHE_TTL = int(os.getenv("CACHE_TTL", "86400"))  # 24h por defecto
+CACHE_TTL = int(os.getenv("CACHE_TTL", "86400"))  
 CACHE_MAX_ENTRIES = int(os.getenv("CACHE_MAX_ENTRIES", "5000"))
-CACHE_POLICY = os.getenv("CACHE_POLICY", os.getenv("REDIS_POLICY", "allkeys-lru"))  # lru/lfu/fifo
+CACHE_POLICY = os.getenv("CACHE_POLICY", os.getenv("REDIS_POLICY", "allkeys-lru"))  
 
 app = FastAPI(title="Cache Service")
 
@@ -35,12 +32,10 @@ consumer: AIOKafkaConsumer | None = None
 consumer_update: AIOKafkaConsumer | None = None
 redis = None
 
-# === Utils ===
 def normalize_question(q: str) -> str:
     q = (q or "").strip().lower()
     q = unicodedata.normalize("NFKC", q)
     q = re.sub(r"\s+", " ", q)
-    # permitir letras con tildes, numeros, guion y espacio
     q = re.sub(r"[^\w\sñáéíóúü-]", "", q, flags=re.UNICODE)
     return q
 
@@ -52,7 +47,7 @@ def key_from(payload: dict) -> str | None:
     return f"qhash:{h}"
 
 async def enforce_fifo():
-    """Mantener FIFO manual si se excede CACHE_MAX_ENTRIES"""
+    
     sz = await redis.zcard("cache_queue")
     while sz > CACHE_MAX_ENTRIES:
         k = await redis.zpopmin("cache_queue")
@@ -62,7 +57,6 @@ async def enforce_fifo():
             logger.info(f"FIFO evicted {victim}")
         sz = await redis.zcard("cache_queue")
 
-# === Startup/Shutdown ===
 async def connect_to_kafka_with_retry():
     max_retries, retry_delay = 15, 5
     for attempt in range(max_retries):
@@ -82,7 +76,7 @@ async def startup_event():
 
     try:
         await redis.config_set("maxmemory-policy", CACHE_POLICY)
-        est_mem = CACHE_MAX_ENTRIES * 20_000  # estimado ~20KB por respuesta
+        est_mem = CACHE_MAX_ENTRIES * 20_000 
         await redis.config_set("maxmemory", f"{est_mem}b")
         logger.info(f"Cache policy={CACHE_POLICY}, max_entries={CACHE_MAX_ENTRIES}, maxmemory≈{est_mem/1e6:.1f}MB")
     except Exception as e:
@@ -124,7 +118,6 @@ async def shutdown():
     if producer: await producer.stop()
     if redis: await redis.close()
 
-# === Consumers ===
 async def consume_requests_loop():
     async for msg in consumer:
         data = msg.value

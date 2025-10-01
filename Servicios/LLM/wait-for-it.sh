@@ -10,7 +10,6 @@ def check_kafka_ready(host, port, max_retries=30):
     
     print(f"Verificando Kafka en {host}:{port}...")
     
-    # 1. Verificar que el puerto esté abierto
     for i in range(max_retries):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -29,7 +28,6 @@ def check_kafka_ready(host, port, max_retries=30):
         print(f"Esperando puerto... intento {i+1}/{max_retries}")
         time.sleep(3)
     
-    # 2. Verificar que Kafka responda a comandos administrativos
     for i in range(max_retries):
         try:
             admin = KafkaAdminClient(

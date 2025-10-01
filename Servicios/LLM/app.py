@@ -9,12 +9,10 @@ logger = logging.getLogger("llm")
 
 app = FastAPI(title="LLM Service")
 
-# Kafka
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
 TOPIC_IN = os.getenv("TOPIC_LLM", "questions.llm")
 TOPIC_OUT = os.getenv("TOPIC_ANSWERS", "questions.answers")
 
-# Ollama
 OLLAMA = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 MODEL  = os.getenv("LLM_MODEL", "llama3.1:8b-instruct-q4_K_M")
 MAX_TOK = int(os.getenv("LLM_MAX_TOKENS", "512"))
@@ -76,7 +74,6 @@ async def call_ollama_stream(prompt: str, model: str) -> str:
                     return "".join(parts)
         except Exception as e:
             logger.error(f"Streaming error: {e}. Falling back to non-streaming.")
-            # Fallback no streaming
             try:
                 async with httpx.AsyncClient(timeout=None) as client:
                     r = await client.post(f"{OLLAMA}/api/generate", json={
