@@ -9,7 +9,6 @@ SAMPLES_TARGET=10000
 
 mkdir -p "$RESULTS_DIR" "$POOLS_DIR"
 
-# === Definición de experimentos ===
 declare -A EXP1=( ["name"]="E1" ["distribution"]="poisson" ["policy"]="allkeys-lru" )
 declare -A EXP2=( ["name"]="E2" ["distribution"]="poisson" ["policy"]="allkeys-lfu" )
 declare -A EXP3=( ["name"]="E3" ["distribution"]="uniform" ["policy"]="allkeys-lru" )
@@ -28,10 +27,10 @@ make_pool() {
   local seed="${3:-42}"
 
   if [[ -s "$dst" ]]; then
-    echo "📦 Pool existente para ${exp_name}: $dst"
+    echo " Pool existente para ${exp_name}: $dst"
     return 0
   fi
-  echo "🎲 Generando pool ${k} para ${exp_name} → $dst"
+  echo "Generando pool ${k} para ${exp_name} → $dst"
 
   python3 - "$SRC_CSV" "$dst" "$k" "$seed" <<'PY'
 import csv, random, sys
@@ -54,7 +53,7 @@ PY
 
 snapshot_before() {
   local name="$1" ; local dist="$2" ; local policy="$3" ; local max_entries="$4" ; local EXP_DIR="$5"
-  echo "📸 BEFORE snapshot → ${EXP_DIR}"
+  echo " BEFORE snapshot → ${EXP_DIR}"
 
   docker exec sd-redis-1 redis-cli CONFIG GET maxmemory-policy maxmemory > "${EXP_DIR}/redis_config_before.txt"
   docker exec sd-redis-1 redis-cli INFO stats   > "${EXP_DIR}/redis_stats_before.txt"
@@ -77,7 +76,7 @@ EOF
 
 snapshot_mid() {
   local name="$1" ; local dist="$2" ; local policy="$3" ; local max_entries="$4" ; local EXP_DIR="$5"
-  echo "📸 MID snapshot → ${EXP_DIR}"
+  echo "MID snapshot → ${EXP_DIR}"
 
   docker exec -i sd-db-1 psql -U app -d qa -c \
   "\\COPY (
@@ -183,7 +182,6 @@ ${name},${dist},${policy},${max_entries},${RATE},${CONCURRENCY},${POOL_TARGET},$
 EOF
 }
 
-# === Ejecución de un experimento ===
 run_experiment() {
   local name=$1
   local dist=$2
