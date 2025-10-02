@@ -14,8 +14,7 @@ declare -A EXP2=( ["name"]="E2" ["distribution"]="poisson" ["policy"]="allkeys-l
 declare -A EXP3=( ["name"]="E3" ["distribution"]="uniform" ["policy"]="allkeys-lru" )
 declare -A EXP4=( ["name"]="E4" ["distribution"]="uniform" ["policy"]="allkeys-lfu" )
 declare -A EXP5=( ["name"]="E5" ["distribution"]="poisson" ["policy"]="allkeys-lru" ["max_entries"]="2000" )
-declare -A EXP6=( ["name"]="E6" ["distribution"]="poisson" ["policy"]="allkeys-lfu" ["max_entries"]="2000" )
-EXPERIMENTS=( EXP1 EXP2 EXP3 EXP4 EXP5 EXP6 )
+EXPERIMENTS=( EXP1 EXP2 EXP3 EXP4 EXP5 )
 
 CONCURRENCY=2
 RATE=5
