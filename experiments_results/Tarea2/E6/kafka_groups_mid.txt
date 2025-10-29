@@ -1,0 +1,11 @@
+### kafka groups mid
+
+GROUP           TOPIC             PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                          HOST            CLIENT-ID
+score-service   questions.answers 0          56408           56411           3               aiokafka-0.10.0-683bba57-23ff-45e4-942e-1ef9e8398222 /172.18.0.15    aiokafka-0.10.0
+
+GROUP           TOPIC              PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                          HOST            CLIENT-ID
+cache-requests  questions.requests 0          181147          181148          1               aiokafka-0.10.0-b1994509-d4fd-4ca3-bfe8-723a92f0cfa8 /172.18.0.14    aiokafka-0.10.0
+
+GROUP                TOPIC             PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+flink-answers-router questions.answers 0          56410           56413           3               -               -               -
+flink-answers-router answers.scored    0          50624           50627           3               -               -               -

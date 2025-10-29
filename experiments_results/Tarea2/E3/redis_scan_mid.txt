@@ -1,0 +1,2 @@
+ERR unknown command 'SCAN 0 COUNT 1000', with args beginning with: 
+

@@ -1,19 +1,12 @@
-version: "3.9"
-
 services:
   ollama:
     image: ollama/ollama:latest
     container_name: sd-ollama-1
-    runtime: nvidia
+    gpus: all
     deploy:
       resources:
         limits:
           memory: 8G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -31,7 +24,7 @@ services:
     container_name: sd-llm-1
     command: uvicorn app:app --host 0.0.0.0 --port 8000
     environment:
-      - OLLAMA_HOST=http://sd-ollama-1:11434
+      - OLLAMA_HOST=http://ollama:11434
       - LLM_MODEL=llama3.2:3b-instruct-q4_K_M
       - LLM_MAX_TOKENS=160
       - LLM_TEMPERATURE=0.2
@@ -40,6 +33,7 @@ services:
       - KAFKA_BOOTSTRAP=kafka:9092
       - TOPIC_LLM=questions.llm
       - TOPIC_ANSWERS=questions.answers
+      - TOPIC_ERRORS=questions.errors
     depends_on:
       - init-topics
       - kafka
@@ -58,7 +52,7 @@ services:
     container_name: sd-cache-1
     command: uvicorn app:app --host 0.0.0.0 --port 8001
     environment:
-      - REDIS_URL=redis://sd-redis-1:6379/0
+      - REDIS_URL=redis://redis:6379/0
       - CACHE_POLICY=allkeys-lru
       - CACHE_MAX_ENTRIES=5000
       - CACHE_TTL=86400
@@ -82,8 +76,7 @@ services:
     environment:
       - KAFKA_BOOTSTRAP=kafka:9092
       - TOPIC_ANSWERS=questions.answers
-      - TOPIC_STORAGE=storage.persist
-      - TOPIC_CACHE_UPDATE=cache.update
+      - TOPIC_SCORED=answers.scored
       - ENABLE_EMBEDDINGS=1
       - ENABLE_ROUGE=1
       - ENABLE_BERTSCORE=0
@@ -119,7 +112,8 @@ services:
     container_name: sd-storage-1
     command: uvicorn app:app --host 0.0.0.0 --port 8003
     environment:
-      - DATABASE_URL=postgresql://app:app@sd-db-1:5432/qa
+      - DATABASE_URL=postgresql://app:app@db:5432/qa
+
       - DB_INIT_MAX_RETRIES=60
       - DB_INIT_RETRY_DELAY=1.0
       - KAFKA_BOOTSTRAP=kafka:9092
@@ -154,13 +148,88 @@ services:
       - REPEAT_POOL_SIZE=0
       - KAFKA_BOOTSTRAP=kafka:9092
       - TOPIC_REQUESTS=questions.requests
+      - STORAGE_URL=http://storage:8003
     depends_on:
       - init-topics
       - kafka
       - cache
       - storage
     ports:
-     - "8010:8010"
+      - "8010:8010"
+    restart: unless-stopped
+
+  # ---------------- Flink cluster ----------------
+  flink-jobmanager:
+    image: sd-flink:1.18-py
+    build:
+      context: ./Servicios/Flink
+      dockerfile: Dockerfile
+    container_name: sd-flink-jm
+    depends_on:
+      - kafka
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 1
+        rest.port: 8080
+        classloader.resolve-order: parent-first
+        classloader.parent-first-patterns.additional: org.apache.kafka,org.apache.kafka.*
+        python.client.executable: /usr/bin/python3
+        python.executable: /usr/bin/python3
+      ROUTER_SCORE_THRESHOLD: "0.4" 
+    volumes:
+      - ./Servicios/Flink/job.py:/opt/flink/job.py:ro
+    ports:
+      - "8080:8080"   # UI (si la expones)
+    command: jobmanager
+
+  flink-taskmanager:
+    image: sd-flink:1.18-py
+    build:
+      context: ./Servicios/Flink
+      dockerfile: Dockerfile
+    container_name: sd-flink-tm
+    depends_on:
+      - flink-jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 1
+        classloader.resolve-order: parent-first
+        classloader.parent-first-patterns.additional: org.apache.kafka,org.apache.kafka.*
+        python.client.executable: /usr/bin/python3
+        python.executable: /usr/bin/python3
+      ROUTER_SCORE_THRESHOLD: "0.4"
+    volumes:
+      - ./Servicios/Flink/job.py:/opt/flink/job.py:ro
+    command: taskmanager
+
+  flink-submit:
+    image: sd-flink:1.18-py
+    build:
+      context: ./Servicios/Flink
+      dockerfile: Dockerfile
+    depends_on:
+      - flink-jobmanager
+      - flink-taskmanager
+      - kafka
+    volumes:
+      - ./Servicios/Flink/job.py:/opt/flink/job.py:ro
+    entrypoint: ["/bin/bash","-lc","flink run -py /opt/flink/job.py -d"]
+    restart: on-failure
+
+  # --------------- Error handler (reintentos) ---------------
+  error-handler:
+    build: ./Servicios/ErrorHandler
+    container_name: sd-error-handler-1
+    environment:
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - TOPIC_ERRORS=questions.errors
+      - TOPIC_REQ=questions.requests
+      - MAX_ATTEMPTS=3
+      - RATE_LIMIT_DELAY=60
+    depends_on:
+      - kafka
     restart: unless-stopped
 
   zookeeper:
@@ -221,9 +290,11 @@ services:
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic questions.requests --partitions 1 --replication-factor 1 &&
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic questions.llm --partitions 1 --replication-factor 1 &&
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic questions.answers --partitions 1 --replication-factor 1 &&
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic answers.scored --partitions 1 --replication-factor 1 &&  # <---
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic storage.persist --partitions 1 --replication-factor 1 &&
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic cache.update --partitions 1 --replication-factor 1 &&
-        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic cache.metrics --partitions 1 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic cache.metrics --partitions 1 --replication-factor 1 &&
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic questions.errors --partitions 1 --replication-factor 1
       "
     restart: "no"
 

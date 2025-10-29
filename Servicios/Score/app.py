@@ -3,14 +3,20 @@ import os, asyncio, json, logging
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from datetime import datetime
 
+# ------- Config -------
 ENABLE_EMBEDDINGS = os.getenv("ENABLE_EMBEDDINGS", "1") == "1"
-ENABLE_ROUGE = os.getenv("ENABLE_ROUGE", "1") == "1"
-ENABLE_BERTSCORE = os.getenv("ENABLE_BERTSCORE", "0") == "1"
-SCORE_THRESHOLD = float(os.getenv("SCORE_THRESHOLD", "0.6"))
+ENABLE_ROUGE      = os.getenv("ENABLE_ROUGE",      "1") == "1"
+ENABLE_BERTSCORE  = os.getenv("ENABLE_BERTSCORE",  "0") == "1"
+SCORE_THRESHOLD   = float(os.getenv("SCORE_THRESHOLD", "0.6"))
 
+KAFKA_BOOTSTRAP   = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
+TOPIC_IN          = os.getenv("TOPIC_ANSWERS", "questions.answers")
+TOPIC_SCORED      = os.getenv("TOPIC_SCORED", "answers.scored")  # <--- NUEVO
+
+# ------- Modelos / Métricas -------
 embedder = None
-rouge_s = None
-bert_score = None
+rouge_s  = None
+bert_sc  = None
 
 if ENABLE_EMBEDDINGS:
     from sentence_transformers import SentenceTransformer
@@ -22,20 +28,16 @@ if ENABLE_ROUGE:
     rouge_s = rouge_scorer.RougeScorer(['rouge1','rougeL'], use_stemmer=True)
 
 if ENABLE_BERTSCORE:
-    from bert_score import score as bert_score  
+    from bert_score import score as bert_sc  # se usa solo si ENABLE_BERTSCORE=1
 
+# ------- Logging / FastAPI -------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("score")
-
 app = FastAPI(title="Score Service")
-
-KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
-TOPIC_IN = os.getenv("TOPIC_ANSWERS", "questions.answers")
-TOPIC_STORAGE = os.getenv("TOPIC_STORAGE", "storage.persist")
-TOPIC_CACHE_UPDATE = os.getenv("TOPIC_CACHE_UPDATE", "cache.update")
 
 producer: AIOKafkaProducer | None = None
 
+# ------- Funciones de score -------
 async def calc_cosine(ref, cand):
     try:
         emb = embedder.encode([ref, cand])
@@ -54,60 +56,42 @@ async def calc_rouge(ref, cand):
 
 async def calc_bert(ref, cand):
     try:
-        P, R, F = bert_score([cand], [ref], lang='es', rescale_with_baseline=True)
+        P, R, F = bert_sc([cand], [ref], lang='es', rescale_with_baseline=True)
         return float(F[0])
     except Exception as e:
         logger.warning(f"BERTScore error: {e}")
         return 0.0
 
 def choose_final_answer(ref: str, cand: str, score_combined: float) -> str:
-
+    # misma regla: si cand tiene texto y score supera umbral => cand
+    # si no, si ref existe => ref
     if cand.strip() and score_combined >= SCORE_THRESHOLD:
         return cand
     return cand if cand.strip() and not ref.strip() else ref
 
+# ------- Loop principal -------
 async def process_msg(msg: dict):
+    # Si es un hit de caché, lo ignora (Flink se encarga de enrutarlos).
     if msg.get("cached"):
-        final_answer = (msg.get("final_answer") or "").strip()
-        scored = {
-            "id": msg.get("id"),
-            "question_id": msg.get("question_id"),
-            "question": msg.get("question"),
-            "reference_answer": msg.get("reference_answer") or "",
-            "llm_answer": "",
-            "final_answer": final_answer,
-            "score_cosine": 0.0,
-            "score_rouge1": 0.0,
-            "score_rougeL": 0.0,
-            "score_bert": 0.0,
-            "score": 0.0,
-            "cached": True,
-            "model": msg.get("model", "cache"),
-            "latency_ms": msg.get("latency_ms", 0),
-            "dist_label": msg.get("dist_label"),
-            "rate": msg.get("rate"),
-            "ts_scored": datetime.utcnow().isoformat()
-        }
-        await producer.send_and_wait(TOPIC_STORAGE, scored)
-        logger.info(f"Stored cached hit {msg.get('id')} without cache.update")
         return
 
     ref = (msg.get("reference_answer") or "").strip()
     cand = (msg.get("llm_answer") or "").strip()
+    if not cand:
+        return
 
     score_cos = 0.0
-    rouge1 = 0.0
-    rougeL = 0.0
-    bertF = 0.0
+    rouge1    = 0.0
+    rougeL    = 0.0
+    bertF     = 0.0
 
-    if ref and cand and ENABLE_EMBEDDINGS:
+    if ref and ENABLE_EMBEDDINGS:
         score_cos = await calc_cosine(ref, cand)
-    if ref and cand and ENABLE_ROUGE:
+    if ref and ENABLE_ROUGE:
         rouge1, rougeL = await calc_rouge(ref, cand)
-    if ref and cand and ENABLE_BERTSCORE:
+    if ref and ENABLE_BERTSCORE:
         bertF = await calc_bert(ref, cand)
 
-    # 60/30/10 como en tu esquema
     weights = (
         (0.6 if ENABLE_EMBEDDINGS else 0.0) +
         (0.3 if ENABLE_BERTSCORE else 0.0) +
@@ -118,8 +102,8 @@ async def process_msg(msg: dict):
     else:
         score_combined = (
             (0.6 * score_cos if ENABLE_EMBEDDINGS else 0.0) +
-            (0.3 * bertF if ENABLE_BERTSCORE else 0.0) +
-            (0.1 * rouge1 if ENABLE_ROUGE else 0.0)
+            (0.3 * bertF    if ENABLE_BERTSCORE else 0.0) +
+            (0.1 * rouge1   if ENABLE_ROUGE else 0.0)
         )
 
     final_answer = choose_final_answer(ref, cand, score_combined)
@@ -141,11 +125,12 @@ async def process_msg(msg: dict):
         "latency_ms": msg.get("latency_ms", 0),
         "dist_label": msg.get("dist_label"),
         "rate": msg.get("rate"),
-        "ts_scored": datetime.utcnow().isoformat()
+        "ts_scored": datetime.utcnow().isoformat(),
+        "retries": int(msg.get("retries", 0)),
+
     }
-    await producer.send_and_wait(TOPIC_STORAGE, scored)
-    await producer.send_and_wait(TOPIC_CACHE_UPDATE, scored)
-    logger.info(f"Scored and updated cache for {msg.get('id')}")
+    await producer.send_and_wait(TOPIC_SCORED, scored)
+    logger.info(f"Scored -> {TOPIC_SCORED} id={msg.get('id')} s={score_combined:.3f}")
 
 async def consume_loop():
     consumer = AIOKafkaConsumer(

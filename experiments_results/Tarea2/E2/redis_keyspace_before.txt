@@ -1,0 +1,2 @@
+# Keyspace
+db0:keys=4,expires=4,avg_ttl=86395827,subexpiry=0

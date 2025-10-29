@@ -1,0 +1,4 @@
+
+GROUP                TOPIC             PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+flink-answers-router questions.answers 0          41040           41048           8               -               -               -
+flink-answers-router answers.scored    0          36941           36948           7               -               -               -

@@ -1,0 +1,2 @@
+name,distribution,policy,max_entries,rate,concurrency,pool_size,repeat_pool,sample_limit,router_threshold,timestamp
+E4,uniform,allkeys-lfu,5000,5,2,30000,0,10000,0.6,2025-10-29T04:43:38+00:00

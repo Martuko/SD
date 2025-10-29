@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import os, asyncio, json, uuid
 from aiokafka import AIOKafkaConsumer
 import asyncpg
@@ -120,3 +120,18 @@ async def shutdown():
 @app.get("/health")
 def health():
     return {"ok": True}
+
+# --------- NUEVO: endpoint de pre-check para Tarea 2 ----------
+@app.get("/answers/{question_id}")
+async def answers(question_id: int, min_score: float = 0.6):
+    async with app.state.pool.acquire() as con:
+        row = await con.fetchrow("""
+          SELECT final_answer, score
+          FROM interactions
+          WHERE question_id=$1
+          ORDER BY created_at DESC
+          LIMIT 1
+        """, question_id)
+        if not row or row["final_answer"] is None or row["score"] is None or row["score"] < min_score:
+            raise HTTPException(status_code=404, detail="No valid answer yet")
+        return {"final_answer": row["final_answer"], "score": float(row["score"])}

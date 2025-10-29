@@ -1,0 +1,2 @@
+name,distribution,policy,max_entries,rate,concurrency,pool_size,repeat_pool,sample_limit,router_threshold,timestamp
+E5,poisson,allkeys-lru,2000,5,2,30000,0,10000,0.6,2025-10-29T09:18:06+00:00
