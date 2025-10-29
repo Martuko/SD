@@ -1,4 +1,0 @@
-maxmemory
-100000000
-maxmemory-policy
-allkeys-lfu

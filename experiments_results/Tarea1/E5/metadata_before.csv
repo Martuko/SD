@@ -1,2 +1,0 @@
-name,distribution,policy,max_entries,rate,concurrency,pool_size,sample_limit,timestamp
-E5,poisson,allkeys-lru,2000,5,2,30000,10000,2025-09-30T15:34:36-03:00

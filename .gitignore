@@ -1,0 +1,6 @@
+# Ignorar carpetas pesadas
+/ollama/
+/data/
+
+# Ignorar Tarea1 pero no Tarea2
+/experiments_results/Tarea1/

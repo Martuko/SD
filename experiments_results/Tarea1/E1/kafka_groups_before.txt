@@ -1,9 +1,0 @@
-### kafka groups before
-
-GROUP           TOPIC             PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                          HOST            CLIENT-ID
-score-service   questions.answers 0          0               0               0               aiokafka-0.10.0-b505207b-f8db-4860-95c6-d0ccdb2c07e5 /172.18.0.16    aiokafka-0.10.0
-
-GROUP           TOPIC              PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                          HOST            CLIENT-ID
-cache-requests  questions.requests 0          0               0               0               aiokafka-0.10.0-5e838abf-8261-421f-9988-b96e65ed254c /172.18.0.13    aiokafka-0.10.0
-
-Error: Consumer group 'flink-answers-router' does not exist.
