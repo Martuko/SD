@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  hadoop-pig:
+    image: suhothayan/hadoop-spark-pig-hive:2.9.2
+    container_name: sd-t3-hadoop-pig
+    hostname: sd-t3-hadoop-pig
+    stdin_open: true
+    tty: true
+    ports:
+      - "50070:50070"   # UI HDFS NameNode
+      - "8088:8088"     # UI YARN ResourceManager
+      - "8080:8080"     # (Spark/Hive UI / Spark History, etc.)
+    volumes:
+      # Montas la carpeta donde está interacciones.csv a /data
+      - ./experiments_results/Tarea3:/data
+      # Montas tus scripts Pig a /pig
+      - ./Servicios/HadoopPig:/pig
